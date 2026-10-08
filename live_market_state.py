@@ -143,6 +143,13 @@ from ai_research_layer import (
     classify_ema_distance,
     classify_rsi,
 )
+from indicators import (
+    add_adx,
+    add_atr,
+    add_bollinger,
+    add_ema,
+    add_rsi,
+)
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -211,7 +218,7 @@ DIRECTION_NONE = "NONE"
 # terminal package appears only on the real --run path).
 _ALLOWED_IMPORT_MODULES = frozenset({
     "ast", "datetime", "json", "os", "re", "sys", "tempfile", "typing",
-    "numpy", "pandas", "ai_research_layer", "MetaTrader5",
+    "numpy", "pandas", "ai_research_layer", "indicators", "MetaTrader5",
 })
 
 # Read-only trading-terminal API surface this file is allowed to use.
@@ -222,84 +229,12 @@ _MT5_ALLOWED_API = (
 
 
 # ============================================================
-# Causal indicator math (identical formulas to
-# market_state_database.py; that module is NOT imported because it
-# loads the trading-terminal package at module level)
+# Causal indicator math
+# The five core indicators now live in the shared, pandas/numpy-only
+# indicators.py module (extracted verbatim; no formula, smoothing,
+# min_periods, ddof, column-name or NaN behaviour change).  The
+# trailing causal feature series below remain local to this file.
 # ============================================================
-def add_atr(df: pd.DataFrame, period: int = ATR_PERIOD) -> pd.DataFrame:
-    """Average True Range (uses only current and previous candles)."""
-    prev_close = df["close"].shift(1)
-    true_range = pd.concat(
-        [df["high"] - df["low"],
-         (df["high"] - prev_close).abs(),
-         (df["low"] - prev_close).abs()],
-        axis=1,
-    ).max(axis=1)
-    df["ATR"] = true_range.ewm(alpha=1 / period, adjust=False,
-                               min_periods=period).mean()
-    return df
-
-
-def add_bollinger(df: pd.DataFrame, period: int = BB_PERIOD,
-                  num_std: float = BB_NUM_STD) -> pd.DataFrame:
-    """Bollinger Bands (rolling - causal by construction)."""
-    middle = df["close"].rolling(period).mean()
-    std = df["close"].rolling(period).std(ddof=0)
-    df["BB_MIDDLE"] = middle
-    df["BB_UPPER"] = middle + num_std * std
-    df["BB_LOWER"] = middle - num_std * std
-    return df
-
-
-def add_adx(df: pd.DataFrame, period: int = ADX_PERIOD) -> pd.DataFrame:
-    """Average Directional Index (Wilder smoothing - causal)."""
-    up_move = df["high"].diff()
-    down_move = -df["low"].diff()
-    plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
-    minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
-    prev_close = df["close"].shift(1)
-    true_range = pd.concat(
-        [df["high"] - df["low"],
-         (df["high"] - prev_close).abs(),
-         (df["low"] - prev_close).abs()],
-        axis=1,
-    ).max(axis=1)
-    alpha = 1 / period
-    atr = true_range.ewm(alpha=alpha, adjust=False,
-                         min_periods=period).mean()
-    plus_di = 100 * plus_dm.ewm(alpha=alpha, adjust=False,
-                                min_periods=period).mean() / atr
-    minus_di = 100 * minus_dm.ewm(alpha=alpha, adjust=False,
-                                  min_periods=period).mean() / atr
-    di_sum = plus_di + minus_di
-    dx = 100 * (plus_di - minus_di).abs() / di_sum.replace(0, np.nan)
-    df["ADX"] = dx.ewm(alpha=alpha, adjust=False,
-                       min_periods=period).mean()
-    return df
-
-
-def add_ema(df: pd.DataFrame, period: int = EMA_TREND_PERIOD
-            ) -> pd.DataFrame:
-    """Exponential Moving Average (causal; state feature only)."""
-    df[f"EMA{period}"] = df["close"].ewm(span=period, adjust=False,
-                                         min_periods=period).mean()
-    return df
-
-
-def add_rsi(df: pd.DataFrame, period: int = RSI_PERIOD) -> pd.DataFrame:
-    """Wilder-style Relative Strength Index (causal)."""
-    delta = df["close"].diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-    avg_gain = gain.ewm(alpha=1 / period, adjust=False,
-                        min_periods=period).mean()
-    avg_loss = loss.ewm(alpha=1 / period, adjust=False,
-                        min_periods=period).mean()
-    rs = avg_gain / avg_loss
-    df["RSI"] = 100 - (100 / (1 + rs))
-    return df
-
-
 def efficiency_ratio(close: pd.Series,
                      window: int = EFF_WINDOW) -> pd.Series:
     """Kaufman Efficiency Ratio over `window` candles (causal).
