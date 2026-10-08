@@ -527,19 +527,28 @@ def build_report(results: List[Dict[str, Any]],
 def resolve_output_paths(directory: str,
                          generated_ts: datetime.datetime
                          ) -> Tuple[str, str, str]:
-    """Primary names, or timestamped alternatives when they already
-    exist.  If an alternative also exists, raise so nothing is written."""
+    """The CSV + JSON + report paths resolved as ONE atomic set.
+
+    The fallback decision is made exactly once for the whole set: when
+    the directory is clean with respect to ALL three primary files the
+    entire set keeps the primary names; when ANY primary file already
+    exists the ENTIRE set uses one shared timestamped suffix.  Every
+    chosen path is then checked and an existing path raises, so nothing
+    is ever overwritten and a mixed primary/timestamped set can never
+    be produced."""
     stamp = generated_ts.strftime(STAMP_FORMAT)
     plan = (
         (OUTPUT_CSV, f"market_data_freshness_{stamp}.csv"),
         (OUTPUT_JSON, f"market_data_freshness_{stamp}.json"),
         (OUTPUT_TXT, f"market_data_freshness_report_{stamp}.txt"),
     )
+    use_fallback = any(
+        os.path.exists(os.path.join(directory, primary))
+        for primary, _ in plan)
     chosen: List[str] = []
     for primary, fallback in plan:
-        path = os.path.join(directory, primary)
-        if os.path.exists(path):
-            path = os.path.join(directory, fallback)
+        path = os.path.join(directory, fallback if use_fallback
+                            else primary)
         if os.path.exists(path):
             raise OutputExistsError(
                 "refusing to overwrite existing file; nothing was written: "
@@ -1156,6 +1165,34 @@ def run_synthetic_tests() -> Tuple[int, int]:
         except OutputExistsError as exc:
             check("an alternative-name collision stops the run",
                   f"market_data_freshness_{stamp}.csv" in str(exc))
+
+        # C4: the CSV + JSON + report fallback decision is made once
+        # for the whole set, so a partially timestamped set is
+        # impossible and all outputs share one stamp.
+        for _label, _present in (("csv", OUTPUT_CSV),
+                                 ("json", OUTPUT_JSON),
+                                 ("report", OUTPUT_TXT)):
+            a_dir = os.path.join(td, "_atomic_" + _label)
+            os.makedirs(a_dir, exist_ok=True)
+            with open(os.path.join(a_dir, _present), "w",
+                      encoding="utf-8") as fh:
+                fh.write("x")
+            a_csv, a_json, a_txt = resolve_output_paths(a_dir, fixed_ts)
+            check("C4 only one primary present (" + _label + ") -> all "
+                  "three timestamped, one shared stamp",
+                  os.path.basename(a_csv)
+                  == f"market_data_freshness_{stamp}.csv"
+                  and os.path.basename(a_json)
+                  == f"market_data_freshness_{stamp}.json"
+                  and os.path.basename(a_txt)
+                  == f"market_data_freshness_report_{stamp}.txt")
+        a_clean = os.path.join(td, "_atomic_clean")
+        os.makedirs(a_clean, exist_ok=True)
+        cl_csv, cl_json, cl_txt = resolve_output_paths(a_clean, fixed_ts)
+        check("C4 clean directory keeps the whole set as primary names",
+              (os.path.basename(cl_csv), os.path.basename(cl_json),
+               os.path.basename(cl_txt))
+              == (OUTPUT_CSV, OUTPUT_JSON, OUTPUT_TXT))
 
         # ---------------- N/O/P/Q/R. safety -------------------
         start_area("N_safety_scans")

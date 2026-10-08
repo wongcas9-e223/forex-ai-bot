@@ -838,30 +838,33 @@ class OutputExistsError(RuntimeError):
 def resolve_output_paths(directory: str,
                          collection_ts: datetime.datetime
                          ) -> Tuple[str, str]:
-    """Choose non-existing output paths; an existing primary file gets
-    the documented timestamped fallback; if that also exists, raise -
-    so nothing is ever overwritten."""
+    """Choose non-existing output paths for the CSV + report as ONE set.
+
+    The fallback decision is made exactly once for the whole set: when
+    the directory is clean with respect to BOTH primary files the
+    entire set keeps the primary names; when ANY primary file already
+    exists the ENTIRE set uses one shared timestamped suffix.  Every
+    chosen path is then checked and an existing path raises, so nothing
+    is ever overwritten and a mixed primary/timestamped set can never
+    be produced."""
     stamp = collection_ts.strftime(STAMP_FORMAT)
-    primary = {
-        "csv": os.path.join(directory, OUTPUT_CSV),
-        "txt": os.path.join(directory, OUTPUT_TXT),
-    }
-    fallback = {
-        "csv": os.path.join(directory, f"live_market_state_{stamp}.csv"),
-        "txt": os.path.join(directory,
-                            f"live_market_state_report_{stamp}.txt"),
-    }
-    chosen: Dict[str, str] = {}
-    for key in ("csv", "txt"):
-        path = primary[key]
-        if os.path.exists(path):
-            path = fallback[key]
+    plan = (
+        (os.path.join(directory, OUTPUT_CSV),
+         os.path.join(directory, f"live_market_state_{stamp}.csv")),
+        (os.path.join(directory, OUTPUT_TXT),
+         os.path.join(directory,
+                      f"live_market_state_report_{stamp}.txt")),
+    )
+    use_fallback = any(os.path.exists(primary) for primary, _ in plan)
+    chosen: List[str] = []
+    for primary, fallback in plan:
+        path = fallback if use_fallback else primary
         if os.path.exists(path):
             raise OutputExistsError(
                 "refusing to overwrite existing file(s); nothing was "
                 f"written: {path}")
-        chosen[key] = path
-    return chosen["csv"], chosen["txt"]
+        chosen.append(path)
+    return chosen[0], chosen[1]
 
 
 def _write_bytes_if_absent(path: str, payload: bytes) -> None:
@@ -1610,6 +1613,53 @@ def run_synthetic_tests() -> Tuple[int, int]:
             check("fallback collision stops everything with a naming "
                   "error",
                   f"live_market_state_{stamp}.csv" in str(exc))
+
+    # ---------------- J2. atomic output-set resolution (C4) ---
+    # The CSV + report fallback decision is made once for the whole
+    # set, so a partially timestamped / mixed set can never appear.
+    ts_a = _fixed_ts()
+    stamp_a = ts_a.strftime(STAMP_FORMAT)
+    with tempfile.TemporaryDirectory() as td_a:
+        c_clean, t_clean = resolve_output_paths(td_a, ts_a)
+        check("C4 clean directory keeps the whole set as primary names",
+              os.path.basename(c_clean) == OUTPUT_CSV
+              and os.path.basename(t_clean) == OUTPUT_TXT)
+    with tempfile.TemporaryDirectory() as td_b:
+        open(os.path.join(td_b, OUTPUT_CSV), "w",
+             encoding="utf-8").write("x")
+        c_b, t_b = resolve_output_paths(td_b, ts_a)
+        check("C4 only primary CSV present -> CSV timestamped",
+              os.path.basename(c_b)
+              == f"live_market_state_{stamp_a}.csv")
+        check("C4 only primary CSV present -> report ALSO timestamped"
+              " with the same stamp",
+              os.path.basename(t_b)
+              == f"live_market_state_report_{stamp_a}.txt")
+    with tempfile.TemporaryDirectory() as td_c:
+        open(os.path.join(td_c, OUTPUT_TXT), "w",
+             encoding="utf-8").write("x")
+        c_c, t_c = resolve_output_paths(td_c, ts_a)
+        check("C4 only primary report present -> report timestamped",
+              os.path.basename(t_c)
+              == f"live_market_state_report_{stamp_a}.txt")
+        check("C4 only primary report present -> CSV ALSO timestamped"
+              " with the same stamp",
+              os.path.basename(c_c)
+              == f"live_market_state_{stamp_a}.csv")
+    with tempfile.TemporaryDirectory() as td_d:
+        open(os.path.join(td_d, OUTPUT_CSV), "w",
+             encoding="utf-8").write("x")
+        open(os.path.join(td_d, OUTPUT_TXT), "w",
+             encoding="utf-8").write("x")
+        c_d, t_d = resolve_output_paths(td_d, ts_a)
+        check("C4 both primaries present -> both timestamped, one stamp",
+              os.path.basename(c_d)
+              == f"live_market_state_{stamp_a}.csv"
+              and os.path.basename(t_d)
+              == f"live_market_state_report_{stamp_a}.txt")
+        names_d = (os.path.basename(c_d), os.path.basename(t_d))
+        check("C4 no mixed primary/timestamped set is ever produced",
+              (OUTPUT_CSV in names_d) == (OUTPUT_TXT in names_d))
 
     # ---------------- K. absence of order API functions -------
     start_area("K_no_order_api_functions")
