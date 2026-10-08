@@ -1,0 +1,14 @@
+﻿.venv/
+__pycache__/
+*.pyc
+
+# Generated research data
+*.csv
+*.json
+*.txt
+
+# Keep Python source files
+!*.py
+
+# Local/runtime files
+*.log
