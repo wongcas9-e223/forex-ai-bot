@@ -81,6 +81,14 @@ import MetaTrader5 as mt5  # Read market data + symbol info (READ-ONLY usage)
 import numpy as np
 import pandas as pd
 
+from indicators import (
+    add_adx,
+    add_atr,
+    add_bollinger,
+    add_ema,
+    add_rsi,
+)
+
 # ============================================================
 # SAFETY GUARD: the trading side of MetaTrader 5 is never touched.
 # These assertions fail immediately at import time if this module is
@@ -203,77 +211,11 @@ REQUIRED_FEATURE_COLUMNS: Tuple[str, ...] = tuple(
 
 
 # ============================================================
-# Indicator functions (causal only - same math as previous scripts)
+# Indicator functions (causal only)
+# The five core indicators are imported from the shared, pandas/numpy-
+# only indicators.py module (extracted verbatim; no formula, smoothing,
+# min_periods, ddof, column-name or NaN behaviour change).
 # ============================================================
-def add_atr(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
-    """Average True Range (uses only current and previous candles)."""
-    prev_close = df["close"].shift(1)
-    true_range = pd.concat(
-        [df["high"] - df["low"],
-         (df["high"] - prev_close).abs(),
-         (df["low"] - prev_close).abs()],
-        axis=1,
-    ).max(axis=1)
-    df["ATR"] = true_range.ewm(alpha=1 / period, adjust=False,
-                               min_periods=period).mean()
-    return df
-
-
-def add_bollinger(df: pd.DataFrame, period: int = 20, num_std: float = 2.0
-                  ) -> pd.DataFrame:
-    """Bollinger Bands (rolling - causal by construction)."""
-    middle = df["close"].rolling(period).mean()
-    std = df["close"].rolling(period).std(ddof=0)
-    df["BB_MIDDLE"] = middle
-    df["BB_UPPER"] = middle + num_std * std
-    df["BB_LOWER"] = middle - num_std * std
-    return df
-
-
-def add_adx(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
-    """Average Directional Index (Wilder - causal)."""
-    up_move = df["high"].diff()
-    down_move = -df["low"].diff()
-    plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
-    minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
-    prev_close = df["close"].shift(1)
-    true_range = pd.concat(
-        [df["high"] - df["low"],
-         (df["high"] - prev_close).abs(),
-         (df["low"] - prev_close).abs()],
-        axis=1,
-    ).max(axis=1)
-    alpha = 1 / period
-    atr = true_range.ewm(alpha=alpha, adjust=False, min_periods=period).mean()
-    plus_di = 100 * plus_dm.ewm(alpha=alpha, adjust=False,
-                                min_periods=period).mean() / atr
-    minus_di = 100 * minus_dm.ewm(alpha=alpha, adjust=False,
-                                  min_periods=period).mean() / atr
-    di_sum = plus_di + minus_di
-    dx = 100 * (plus_di - minus_di).abs() / di_sum.replace(0, np.nan)
-    df["ADX"] = dx.ewm(alpha=alpha, adjust=False, min_periods=period).mean()
-    return df
-
-
-def add_ema(df: pd.DataFrame, period: int) -> pd.DataFrame:
-    """Exponential Moving Average (causal; state feature only)."""
-    df[f"EMA{period}"] = df["close"].ewm(span=period, adjust=False,
-                                         min_periods=period).mean()
-    return df
-
-
-def add_rsi(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
-    """Wilder-style Relative Strength Index (causal), as previous modules."""
-    delta = df["close"].diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-    avg_gain = gain.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
-    avg_loss = loss.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
-    rs = avg_gain / avg_loss
-    df["RSI"] = 100 - (100 / (1 + rs))
-    return df
-
-
 def add_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """All indicators needed by the database (causal by construction)."""
     df = add_atr(df, ATR_PERIOD)
