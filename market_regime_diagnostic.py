@@ -74,6 +74,13 @@ import MetaTrader5 as mt5  # Read market data + symbol info (READ-ONLY usage)
 import pandas as pd        # DataFrame + indicator math
 import numpy as np         # numeric helpers
 
+from indicators import (
+    add_adx,
+    add_atr,
+    add_bollinger,
+    add_ema,
+)
+
 # ============================================================
 # SECTION 2: Settings - frozen, NOT optimized, IDENTICAL everywhere
 # ============================================================
@@ -116,68 +123,12 @@ VOL_BUCKETS = ["LOW", "MEDIUM", "HIGH"]         # ATR% terciles
 
 
 # ============================================================
-# SECTION 3: Indicator functions (causal only - same math as the
-# previous experiment scripts in this project)
+# SECTION 3: Indicator functions (causal only)
+# The four core indicators (add_atr, add_bollinger, add_adx, add_ema)
+# are imported from the shared, pandas/numpy-only indicators.py module
+# (extracted verbatim; no formula, smoothing, min_periods, ddof,
+# column-name or NaN behaviour change).
 # ============================================================
-def add_atr(df, period=14):
-    """Average True Range - a simple volatility measure."""
-    prev_close = df["close"].shift(1)
-    true_range = pd.concat(
-        [
-            df["high"] - df["low"],
-            (df["high"] - prev_close).abs(),
-            (df["low"] - prev_close).abs(),
-        ],
-        axis=1,
-    ).max(axis=1)
-
-    df["ATR"] = true_range.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
-    return df
-
-
-def add_bollinger(df, period=20, num_std=2.0):
-    """Bollinger Bands (middle, upper, lower)."""
-    middle = df["close"].rolling(period).mean()
-    std = df["close"].rolling(period).std(ddof=0)
-    df["BB_MIDDLE"] = middle
-    df["BB_UPPER"] = middle + num_std * std
-    df["BB_LOWER"] = middle - num_std * std
-    return df
-
-
-def add_adx(df, period=14):
-    """Average Directional Index (Wilder's classic calculation)."""
-    up_move = df["high"].diff()
-    down_move = -df["low"].diff()
-
-    plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
-    minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
-
-    prev_close = df["close"].shift(1)
-    true_range = pd.concat(
-        [
-            df["high"] - df["low"],
-            (df["high"] - prev_close).abs(),
-            (df["low"] - prev_close).abs(),
-        ],
-        axis=1,
-    ).max(axis=1)
-
-    alpha = 1 / period
-    atr = true_range.ewm(alpha=alpha, adjust=False, min_periods=period).mean()
-    plus_di = 100 * plus_dm.ewm(alpha=alpha, adjust=False, min_periods=period).mean() / atr
-    minus_di = 100 * minus_dm.ewm(alpha=alpha, adjust=False, min_periods=period).mean() / atr
-
-    di_sum = plus_di + minus_di
-    dx = 100 * (plus_di - minus_di).abs() / di_sum.replace(0, np.nan)
-    df["ADX"] = dx.ewm(alpha=alpha, adjust=False, min_periods=period).mean()
-    return df
-
-
-def add_ema(df, period):
-    """Exponential Moving Average of the close price."""
-    df[f"EMA{period}"] = df["close"].ewm(span=period, adjust=False, min_periods=period).mean()
-    return df
 
 
 # ============================================================
