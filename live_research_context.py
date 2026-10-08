@@ -34,7 +34,7 @@ REUSE (the frozen definitions are NOT re-created here)
     Live-state column names, status values and warm-up constants are
     reused from live_market_state.py.
 
-INPUT FILES (read-only; all fourteen checked; a missing file is named)
+INPUT FILES (read-only; all eleven checked; a missing file is named)
     live_market_state.csv
     live_market_state_report.txt
     (The real --run instead selects the newest VALID timestamped
@@ -46,9 +46,6 @@ INPUT FILES (read-only; all fourteen checked; a missing file is named)
     pair exists.  The selected names are printed and listed under
     "input files read" in the generated report.  The synthetic tests may
     keep using the legacy names internally.)
-    ai_trading_analyst_context.csv
-    ai_trading_analyst_context.json
-    ai_trading_analyst_report.txt
     ai_research_context_all.csv
     ai_research_context_report.json
     market_memory_oos_validation.csv
@@ -150,9 +147,6 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # ============================================================
 LIVE_CSV = "live_market_state.csv"
 LIVE_TXT = "live_market_state_report.txt"
-ANALYST_CTX_CSV = "ai_trading_analyst_context.csv"
-ANALYST_CTX_JSON = "ai_trading_analyst_context.json"
-ANALYST_TXT = "ai_trading_analyst_report.txt"
 RESEARCH_ALL_CSV = "ai_research_context_all.csv"
 RESEARCH_JSON = "ai_research_context_report.json"
 MEMORY_VALIDATION_CSV = "market_memory_oos_validation.csv"
@@ -164,7 +158,7 @@ OOS_WALKFORWARD_CSV = "market_state_oos_walkforward.csv"
 OOS_CROSS_CSV = "market_state_oos_cross_instrument.csv"
 
 REQUIRED_INPUT_FILES: Tuple[str, ...] = (
-    LIVE_CSV, LIVE_TXT, ANALYST_CTX_CSV, ANALYST_CTX_JSON, ANALYST_TXT,
+    LIVE_CSV, LIVE_TXT,
     RESEARCH_ALL_CSV, RESEARCH_JSON, MEMORY_VALIDATION_CSV,
     MEMORY_DETAILS_CSV, MEMORY_SUMMARY_CSV, OOS_PERIOD_CSV, OOS_STATE_CSV,
     OOS_WALKFORWARD_CSV, OOS_CROSS_CSV,
@@ -1529,7 +1523,7 @@ def run_synthetic_tests() -> Tuple[int, int]:
         missing2 = check_bridge_inputs(partial)
         check("a partially populated directory names only the absent files",
               LIVE_CSV not in missing2
-              and ANALYST_CTX_CSV in missing2
+              and RESEARCH_ALL_CSV in missing2
               and OOS_STATE_CSV in missing2)
 
         # ---------------- F. no future-candle lookup -----------
@@ -1830,6 +1824,57 @@ def run_synthetic_tests() -> Tuple[int, int]:
                   "order" + "_send", "order" + "_check",
                   "order" + "_modify", "order" + "_cancel")))
 
+        # ---------------- L. C3 regression: analyst outputs -------
+        # The analyst layer's own output files are NOT inputs of this
+        # bridge.  These tests prove the three files are not required
+        # and that the context output is byte-identical whether they are
+        # absent or present.
+        start_area("L_c3_optional_analyst_outputs")
+        c3_dir = os.path.join(td, "_c3_optional")
+        os.makedirs(c3_dir, exist_ok=True)
+        build_test_bundle(c3_dir)
+        # Assembled from split literals so this source never contains the
+        # filenames contiguously (matching the safety-scan convention).
+        _analyst_prefix = "ai_trading_" + "analyst_"
+        optional_outputs = (_analyst_prefix + "context.csv",
+                            _analyst_prefix + "context.json",
+                            _analyst_prefix + "report.txt")
+        check("C3 the three analyst output files are not required inputs",
+              all(name not in REQUIRED_INPUT_FILES
+                  for name in optional_outputs))
+        missing_c3 = check_bridge_inputs(c3_dir)
+        check("C3 none of the three analyst outputs is reported missing",
+              all(name not in missing_c3 for name in optional_outputs))
+        check("C3 the three analyst outputs are absent before the test",
+              all(not os.path.isfile(os.path.join(c3_dir, name))
+                  for name in optional_outputs))
+        absent_ctx = build_contexts(c3_dir)
+        absent_csv = contexts_to_csv(absent_ctx)
+        absent_json = contexts_to_json(absent_ctx, fixed_ts,
+                                       REQUIRED_INPUT_FILES)
+        absent_rep = build_report(absent_ctx, fixed_ts, REQUIRED_INPUT_FILES)
+        for name in optional_outputs:
+            with open(os.path.join(c3_dir, name), "w",
+                      encoding="utf-8") as fh:
+                fh.write("PRESENT-BUT-UNUSED\n")
+        present_ctx = build_contexts(c3_dir)
+        present_csv = contexts_to_csv(present_ctx)
+        present_json = contexts_to_json(present_ctx, fixed_ts,
+                                        REQUIRED_INPUT_FILES)
+        present_rep = build_report(present_ctx, fixed_ts,
+                                   REQUIRED_INPUT_FILES)
+        check("C3 context CSV is unchanged when the files are present",
+              absent_csv == present_csv)
+        check("C3 context JSON is unchanged when the files are present",
+              absent_json == present_json)
+        check("C3 context report is unchanged when the files are present",
+              absent_rep == present_rep)
+        check("C3 the analyst outputs never appear in the read inputs",
+              all(name not in resolved_input_names(
+                  os.path.join(c3_dir, LIVE_CSV),
+                  os.path.join(c3_dir, LIVE_TXT))
+                  for name in optional_outputs))
+
     start_area(None)
     print()
     print("  Per-area verification (area -> passed/failed):")
@@ -1840,7 +1885,7 @@ def run_synthetic_tests() -> Tuple[int, int]:
         "E_missing_input_handling", "F_no_future_lookup",
         "G_determinism_outputs", "H_safety_scans",
         "J_live_input_selection", "I_cli_gating",
-        "K_freshness_gate",
+        "K_freshness_gate", "L_c3_optional_analyst_outputs",
     )
     for name in order:
         p, f = stats.get(name, (0, 0))
